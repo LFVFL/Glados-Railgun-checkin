@@ -100,6 +100,60 @@ YESCAPTCHA_CREATE = "https://api.yescaptcha.com/createTask"
 YESCAPTCHA_RESULT = "https://api.yescaptcha.com/getTaskResult"
 TWOCAPTCHA_IN = "https://2captcha.com/in.php"
 TWOCAPTCHA_RES = "https://2captcha.com/res.php"
+PEAK_SOLVE = "https://api.peak.fo/solve"
+
+
+def solve_peak(key: str, sitekey: str, pageurl: str, action: str, cdata: str, log) -> Optional[str]:
+    """Peak Solutions：单次 POST 同步返回 token，无需轮询。
+
+    关键：action 与 cdata(nonce) 必须与前端一致，Cloudflare 会把它们绑进 token，
+    缺任意一个 glados 都会回 code=5 turnstile。
+    """
+    payload: Dict[str, Any] = {
+        "task_type": "TurnstileTaskProxyLess",
+        "url": pageurl,
+        "sitekey": sitekey,
+        "action": action,
+        "cdata": cdata,
+    }
+    for attempt in range(3):
+        try:
+            r = requests.post(
+                PEAK_SOLVE,
+                headers={"X-API-Key": key, "Content-Type": "application/json"},
+                json=payload,
+                timeout=180,
+            )
+        except Exception as e:  # 网络抖动重试
+            log(f"  peak 请求异常（第 {attempt + 1} 次）: {str(e)[:120]}")
+            time.sleep(2)
+            continue
+
+        if r.status_code == 401:
+            log("  peak 鉴权失败：X-API-Key 无效")
+            return None
+        if r.status_code == 402:
+            log("  peak 余额不足")
+            return None
+        if r.status_code != 200:
+            log(f"  peak HTTP {r.status_code}: {r.text[:200]}")
+            continue
+
+        try:
+            data = r.json()
+        except Exception:
+            log(f"  peak 返回非 JSON: {r.text[:200]}")
+            continue
+
+        if data.get("success"):
+            tok = (data.get("data") or {}).get("token")
+            if tok:
+                return tok
+            log(f"  peak 成功但无 token: {str(data)[:200]}")
+        else:
+            log(f"  peak 求解失败: {str(data)[:250]}")
+        time.sleep(2)
+    return None
 
 
 def solve_capsolver(key: str, sitekey: str, pageurl: str, action: str, cdata: str, log) -> Optional[str]:
@@ -205,6 +259,7 @@ def solve_yescaptcha(key: str, sitekey: str, pageurl: str, action: str, cdata: s
 
 
 SOLVERS = {
+    "peak": solve_peak,
     "capsolver": solve_capsolver,
     "2captcha": solve_2captcha,
     "yescaptcha": solve_yescaptcha,

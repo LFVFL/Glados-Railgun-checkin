@@ -61,8 +61,13 @@ challenge -> 求解服务(sitekey + pageurl + action=checkin + cdata=nonce) -> t
           -> proof = sha256(nonce + ".glados-observe-v1") -> POST /api/user/checkin
 ```
 
-支持 `capsolver` / `yescaptcha` / `2captcha`。内置 **UA 自动对齐**：遇到 `code=4 device-mismatch`
+支持 `peak` / `capsolver` / `yescaptcha` / `2captcha`。内置 **UA 自动对齐**：遇到 `code=4 device-mismatch`
 会读取 `loginDevice` 并自动切换到对应系统 UA 重试，所以 Windows / Android / iOS / macOS 的 cookie 都能用。
+
+> **`peak` 是本项目实测唯一跑通的 provider**（[peak.fo](https://peak.fo)，Cloudflare 专精，
+> 单次 POST 同步返回 token，无需轮询，新账号送 1000 次免费）。
+> 关键点：必须把 `action=checkin` 和 `cdata=<本次 nonce>` 一起传给求解服务——
+> Cloudflare 会把这两个值绑进 token，缺任一（或 cdata 用了旧 nonce）服务端会回 `code=5 turnstile`。
 
 ### 引擎 B：`browser`（本地 / 自建 runner 推荐）
 
@@ -111,7 +116,7 @@ code=4 reason=device-mismatch  loginDevice=Android  currentDevice=Windows
    |---|---|---|
    | `GLADOS_COOKIES` | ✅ | 一个或多个账号的 Cookie，多账号用 `&` 连接 |
    | `PUSHPLUS_TOKEN` | 建议 | PushPlus token，不填则只打日志 |
-   | `TURNSTILE_PROVIDER` | 推荐 | `capsolver` / `yescaptcha` / `2captcha` |
+   | `TURNSTILE_PROVIDER` | 推荐 | `peak` / `capsolver` / `yescaptcha` / `2captcha` |
    | `TURNSTILE_API_KEY` | 推荐 | 求解服务的 API Key |
 
    > 不配 `TURNSTILE_*` 时走浏览器引擎；GitHub 托管 runner 上过不了 Turnstile（见第 2 节）。
@@ -122,14 +127,16 @@ code=4 reason=device-mismatch  loginDevice=Android  currentDevice=Windows
 
 ### 求解服务怎么配
 
-以 CapSolver 为例：注册后在后台拿 `clientKey`，然后：
+**Peak（推荐，本项目实测跑通）**：在 <https://peak.fo/dashboard/keys> 注册，新账号送 1000 次免费，
+拿到 `pk_...` 后：
 
 ```
-TURNSTILE_PROVIDER = capsolver
-TURNSTILE_API_KEY  = CAP-xxxxxxxxxxxxxxxx
+TURNSTILE_PROVIDER = peak
+TURNSTILE_API_KEY  = pk_xxxxxxxxxxxxxxxx
 ```
 
-YesCaptcha / 2Captcha 同理，把 provider 换成对应名字即可（脚本已内置三家的 createTask/getTaskResult 流程）。
+CapSolver / YesCaptcha / 2Captcha 同理，把 provider 换成对应名字即可
+（脚本已内置这四家的求解流程；peak 是唯一实测验证过的）。
 
 ### Cookie 怎么取
 
@@ -150,7 +157,7 @@ gld:sess=AAA; gld:sess.sig=BBB; gld:accts=CCC; gld:accts.sig=DDD&gld:sess=EEE; g
 |---|---|---|
 | `GLADOS_COOKIES` | – | 必填，cookie 串，多账号用 `&` 分隔 |
 | `PUSHPLUS_TOKEN` | – | PushPlus token |
-| `TURNSTILE_PROVIDER` | – | 求解服务：`capsolver` / `yescaptcha` / `2captcha`（配置后走 api 引擎） |
+| `TURNSTILE_PROVIDER` | – | 求解服务：`peak` / `capsolver` / `yescaptcha` / `2captcha`（配置后走 api 引擎） |
 | `TURNSTILE_API_KEY` | – | 求解服务 API Key |
 | `GLADOS_PROXY` | – | 出口代理，`http://user:pass@host:port` 或 `socks5://host:port`。**IP 被限流时填这个最有效** |
 | `GLADOS_HEADLESS` | `0` | browser 引擎必须 `0`；`1` 会因 Turnstile 拿不到 token 失败 |
@@ -234,6 +241,15 @@ cookie 失效（被登出）。重新登录拿新 cookie。
   - 按前端算法补上 `proof = sha256(nonce + ".glados-observe-v1")`；
   - 推送后端改为 PushPlus，手机优先卡片式排版；
   - 工作流改为 `ubuntu-latest`，有求解服务走 api 引擎，否则回退 xvfb + 浏览器引擎。
+- **2026-11-26（续）**：跑通 Peak Solutions，取得真实 `code=0`。
+  - 新增 provider `peak`（peak.fo，单次 POST 同步返回 token，无需轮询）；
+  - **定位到 `code=5 turnstile` 的真正原因**：求解时必须同时传 `action=checkin` 与
+    `cdata=<本次 nonce>`。缺二者之一服务端就拒收 token，与 IP、UA、浏览器无关；
+  - 实测结果：无 action → `code=5`；仅 action → `code=5`；
+    `action+cdata` → **`code=0 Checkin! Got 2 Points`**；
+  - 两个引擎都支持 `GLADOS_PROXY`（`session.proxies` / Playwright `proxy`），
+    代理不可用时明确报错而非静默失败；
+  - 出口 IP 被 Cloudflare 限流时（challenge 端点 400）立即放弃本轮重试，避免情况恶化。
 
 ## 免责声明
 
