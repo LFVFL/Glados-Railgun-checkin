@@ -100,6 +100,20 @@ def attempt_checkin(page, log, timeout_s: int = 75) -> Dict[str, Any]:
         referer="https://glados.space/console",
     )
 
+    # Turnstile 加载诊断：400 / 请求失败说明 challenges.cloudflare.com 被拦或 IP 被限流
+    ts_problems: List[str] = []
+
+    def on_resp(resp):
+        if "challenges.cloudflare.com" in resp.url and resp.status >= 400:
+            ts_problems.append(f"{resp.status} {resp.url[:80]}")
+
+    def on_fail(req):
+        if "challenges.cloudflare.com" in req.url:
+            ts_problems.append(f"failed {req.failure}")
+
+    page.on("response", on_resp)
+    page.on("requestfailed", on_fail)
+
     label = wait_for_button(page, log)
     log(f"点击按钮: {label}")
 
@@ -141,9 +155,12 @@ def attempt_checkin(page, log, timeout_s: int = 75) -> Dict[str, Any]:
             left = int(deadline - time.time())
             if left % 10 < 2:
                 log(f"  等待 Cloudflare 校验… 剩余 {left}s")
-        return {}
+        if ts_problems:
+            log(f"  Turnstile 资源加载异常: {ts_problems[:3]}")
+        return {"ts_problems": ts_problems}
     finally:
-        page.remove_listener("response", on_response)
+        page.remove_listener("response", on_resp)
+        page.remove_listener("requestfailed", on_fail)
 
 
 def run_account(index: int, cookie_raw: str, headless: bool, log) -> AccountResult:
@@ -249,7 +266,18 @@ def run_account(index: int, cookie_raw: str, headless: bool, log) -> AccountResu
     # code=None 说明连 POST 都没发出去：Turnstile widget 在当前环境没完成
     if not result.ok and code is None:
         rec = result.detail.get("attempts") or {}
-        if rec.get("tsState") == "error" or rec.get("has_token") is False:
+        probs = rec.get("ts_problems") or []
+        if any(p.startswith("400") for p in probs):
+            result.message = (
+                "Turnstile 资源返回 400：当前出口 IP 被 Cloudflare 限流，"
+                "换网络（家宽/手机热点）或稍后重试即可；也可改用 api 引擎（求解服务）。"
+            )
+        elif probs:
+            result.message = (
+                f"Turnstile 资源加载失败（{probs[0][:60]}）："
+                "检查网络/代理是否拦截 challenges.cloudflare.com。"
+            )
+        elif rec.get("tsState") == "error" or rec.get("has_token") is False:
             result.message = (
                 "Turnstile 未通过，未发出签到请求。当前环境无法完成 Cloudflare 校验，"
                 "请改用 api 引擎（TURNSTILE_PROVIDER + TURNSTILE_API_KEY）或自建 runner。"
