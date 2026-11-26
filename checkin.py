@@ -349,7 +349,7 @@ def num(value: Optional[float], dash: str = "—") -> str:
     return f"{v:g}"
 
 
-def render_push_html(results: List[AccountResult], headless: bool) -> str:
+def render_push_html(results: List[AccountResult], engine: str) -> str:
     """手机优先的推送卡片。
 
     PushPlus 在微信内置浏览器里渲染，可视宽度约 330~380px，
@@ -362,6 +362,9 @@ def render_push_html(results: List[AccountResult], headless: bool) -> str:
 
     accent = "#0f9d58" if fail_count == 0 else "#d93025"
     headline = "GLaDOS 每日签到" if fail_count == 0 else "GLaDOS 签到异常"
+
+    # 卡片里只放短标签，避免窄屏溢出
+    engine_short = "求解服务" if engine.startswith("api") else "浏览器"
 
     cards = []
     for i, r in enumerate(results, 1):
@@ -420,8 +423,8 @@ def render_push_html(results: List[AccountResult], headless: bool) -> str:
         <div style="font-size:19px;font-weight:700;color:#111;line-height:1.5;">{len(results)}</div>
       </div>
       <div style="flex:1 0 30%;min-width:78px;">
-        <div style="font-size:11px;color:#9a9a9a;line-height:1.4;">运行模式</div>
-        <div style="font-size:19px;font-weight:700;color:#111;line-height:1.5;">{'Headless' if headless else 'Headful'}</div>
+        <div style="font-size:11px;color:#9a9a9a;line-height:1.4;">运行引擎</div>
+        <div style="font-size:17px;font-weight:700;color:#111;line-height:1.5;white-space:nowrap;">{engine_short}</div>
       </div>
     </div>
   </div>
@@ -431,13 +434,13 @@ def render_push_html(results: List[AccountResult], headless: bool) -> str:
   </div>
 
   <div style="padding:0 14px 14px;font-size:11px;color:#a5a5a5;line-height:1.7;">
-    Turnstile 由真实 Chromium 现场通过 · action=checkin · cData=nonce<br>
+    Turnstile · action=checkin · cData=nonce<br>
     proof = sha256(nonce + ".glados-observe-v1")
   </div>
 </div>"""
 
 
-def push_pushplus(token: str, results: List[AccountResult], headless: bool, log) -> None:
+def push_pushplus(token: str, results: List[AccountResult], engine: str, log) -> None:
     import requests
 
     fail = sum(1 for r in results if not r.ok)
@@ -446,7 +449,7 @@ def push_pushplus(token: str, results: List[AccountResult], headless: bool, log)
     payload = {
         "token": token,
         "title": title,
-        "content": render_push_html(results, headless),
+        "content": render_push_html(results, engine),
         "template": "html",
     }
     try:
@@ -564,7 +567,7 @@ def main() -> int:
     log(f"汇总: 成功 {ok} · 已签 {rep} · 失败 {bad} · 本次 +{gained} 分")
 
     if push_token:
-        push_pushplus(push_token, results, headless, log)
+        push_pushplus(push_token, results, engine, log)
     else:
         log("未配置 PUSHPLUS_TOKEN，跳过推送")
 

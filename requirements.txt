@@ -1,2 +1,6 @@
-playwright>=1.49.0
+# api 引擎（推荐，GitHub Actions 用这个）：只需要 requests
 requests>=2.31.0
+
+# browser 引擎（本地/自建 runner，真实桌面才有效）：需要 Playwright
+# 装完还要执行：python -m playwright install chromium
+playwright>=1.49.0
