@@ -1,0 +1,48 @@
+name: auto check (self-hosted)
+
+# 自建 runner 专用：在你自己的 Windows/macOS 电脑（或带桌面的 NAS/小主机）上注册
+# GitHub self-hosted runner 后，用这个工作流跑「真实浏览器」引擎。
+# 这是唯一「完全免费 + 稳定」的组合：真实桌面 → Turnstile 必然放行。
+#
+# 注册方法：仓库 Settings → Actions → Runners → New self-hosted runner，
+# 按提示在目标机器执行 config.cmd / config.sh，标签保持默认即可。
+
+on:
+  # 故意只用手动触发：没注册自建 runner 时定时任务会一直排队、堆积。
+  # 注册好 runner 后，如果你想让这个工作流也自动跑，把下面的 schedule 取消注释。
+  workflow_dispatch:
+  # schedule:
+  #   - cron: '18 1,4 * * *'
+
+jobs:
+  checkin:
+    name: glados checkin (self-hosted)
+    runs-on: [self-hosted, Windows, X64]
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Install Playwright Chromium
+        run: python -m playwright install chromium
+
+      - name: Running checkin
+        run: python checkin.py
+        env:
+          GLADOS_COOKIES: ${{ secrets.GLADOS_COOKIES }}
+          PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
+          GLADOS_HEADLESS: '0'
+          GLADOS_RETRY: '3'
+          GLADOS_BROWSER_CHANNEL: 'chrome'
+          PYTHONIOENCODING: 'utf-8'

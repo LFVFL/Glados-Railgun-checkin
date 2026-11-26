@@ -75,8 +75,19 @@ Playwright 驱动真实 Chromium（headful）现场通过 Turnstile，**只有�
 | 方案 | 成本 | 稳定性 | 说明 |
 |---|---|---|---|
 | **① 求解服务 + GitHub Actions** | 约 ¥0.01~0.05/次 | ⭐⭐⭐⭐⭐ | 推荐，配两个 secret 即可 |
-| **② 自建 runner（自己的电脑/NAS/软路由）** | 免费 | ⭐⭐⭐⭐⭐ | 改 `runs-on: self-hosted`，有真实桌面，browser 引擎必过 |
+| **② 自建 runner（自己的电脑/NAS/软路由）** | 免费 | ⭐⭐⭐⭐⭐ | 用 `gladosCheck.selfhosted.yml`，真实桌面，browser 引擎必过 |
 | **③ GitHub 托管 runner + browser 引擎** | 免费 | ⭐ | 实测过不了 Turnstile，**不推荐** |
+
+### 自建 runner 怎么跑
+
+1. 仓库 **Settings → Actions → Runners → New self-hosted runner**，按提示在目标机器
+   （Windows 桌面 / macOS，需有真实图形会话）上执行 `config.cmd`，标签保持默认；
+2. 仓库里启用 `.github/workflows/gladosCheck.selfhosted.yml`（默认只允许手动触发，
+   想定时就把文件里的 `schedule` 取消注释，并停用 `gladosCheck.yml` 的定时）；
+3. 该工作流用 `runs-on: [self-hosted, Windows, X64]` + 系统 Chrome，headful 直跑。
+
+> 为什么免费方案里只有自建 runner 靠谱：Turnstile 判定的是**真实浏览器环境**
+> （GPU、渲染、输入事件、指纹自洽），托管 runner 的虚拟机在这几项上都露馅。
 
 ## 4. device-mismatch 说明
 

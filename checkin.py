@@ -246,6 +246,17 @@ def run_account(index: int, cookie_raw: str, headless: bool, log) -> AccountResu
     result.reason = str(body.get("reason") or "")
     result.ok = bool(code in (0, 1) or result.repeated)
 
+    # code=None 说明连 POST 都没发出去：Turnstile widget 在当前环境没完成
+    if not result.ok and code is None:
+        rec = result.detail.get("attempts") or {}
+        if rec.get("tsState") == "error" or rec.get("has_token") is False:
+            result.message = (
+                "Turnstile 未通过，未发出签到请求。当前环境无法完成 Cloudflare 校验，"
+                "请改用 api 引擎（TURNSTILE_PROVIDER + TURNSTILE_API_KEY）或自建 runner。"
+            )
+        else:
+            result.message = "未捕获到签到请求，页面可能未加载完成或被网络拦截。"
+
     if body.get("points") is not None:
         try:
             result.points = float(body["points"])
