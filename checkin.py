@@ -172,6 +172,13 @@ def run_account(index: int, cookie_raw: str, headless: bool, log) -> AccountResu
     channel = os.environ.get("GLADOS_BROWSER_CHANNEL", "").strip() or None
     ua = os.environ.get("GLADOS_UA", "").strip() or None
     attempts = max(1, int(os.environ.get("GLADOS_RETRY", "3") or 3))
+    proxy = ""
+    for name in ("GLADOS_PROXY", "HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy"):
+        proxy = (os.environ.get(name) or "").strip()
+        if proxy:
+            break
+    if proxy:
+        log(f"出口代理: {proxy.split('@')[-1]}")
 
     context_kwargs: Dict[str, Any] = {
         "locale": "zh-CN",
@@ -181,16 +188,20 @@ def run_account(index: int, cookie_raw: str, headless: bool, log) -> AccountResu
     if ua:
         context_kwargs["user_agent"] = ua
 
+    launch_kwargs: Dict[str, Any] = {
+        "headless": headless,
+        "channel": channel,
+        "args": [
+            "--disable-blink-features=AutomationControlled",
+            "--no-sandbox",
+            "--disable-dev-shm-usage",
+        ],
+    }
+    if proxy:
+        launch_kwargs["proxy"] = {"server": proxy}
+
     with sync_playwright() as p:
-        browser = p.chromium.launch(
-            headless=headless,
-            channel=channel,
-            args=[
-                "--disable-blink-features=AutomationControlled",
-                "--no-sandbox",
-                "--disable-dev-shm-usage",
-            ],
-        )
+        browser = p.chromium.launch(**launch_kwargs)
         context = browser.new_context(**context_kwargs)
         context.add_cookies(parse_cookie_string(cookie_raw))
         page = context.new_page()

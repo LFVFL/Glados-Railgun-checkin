@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import time
 from typing import Any, Dict, Optional, Tuple
 
@@ -212,6 +213,18 @@ SOLVERS = {
 
 # ---------------------------------------------------------------- 主流程
 
+def resolve_proxy() -> Optional[str]:
+    """出口代理：GLADOS_PROXY 优先，其次环境里常见的 HTTPS_PROXY / ALL_PROXY。
+
+    出口 IP 被 Cloudflare 限流（challenge 端点 400）时，挂一个干净代理即可绕过。
+    """
+    for name in ("GLADOS_PROXY", "HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy"):
+        v = (os.environ.get(name) or "").strip()
+        if v:
+            return v
+    return None
+
+
 def run_account(index: int, cookie_raw: str, provider: str, api_key: str, log) -> Dict[str, Any]:
     """返回与浏览器引擎一致的字典结构，便于统一渲染/推送。"""
     log(f"开始处理账号 #{index}（api 引擎 / {provider}）")
@@ -223,6 +236,10 @@ def run_account(index: int, cookie_raw: str, provider: str, api_key: str, log) -
             cookie_dict[k] = v
 
     info: Dict[str, Any] = {"attempts": [], "checkin": {}, "points": {}, "status": {}, "ip": ""}
+
+    proxy = resolve_proxy()
+    if proxy:
+        log(f"  出口代理: {proxy.split('@')[-1]}")
 
     family_order = ["windows", "android", "ios", "mac", "linux"]
     body: Dict[str, Any] = {}
@@ -239,6 +256,8 @@ def run_account(index: int, cookie_raw: str, provider: str, api_key: str, log) -
         s = requests.Session()
         s.cookies.update(cookie_dict)
         s.headers.update(_base_headers(profile))
+        if proxy:
+            s.proxies.update({"http": proxy, "https": proxy})
 
         try:
             ch = s.get(SITE + CHALLENGE, timeout=30).json()
