@@ -381,7 +381,12 @@ def render_push_html(results: List[AccountResult], engine: str) -> str:
     total_gain = num(sum(r.gained or 0 for r in results))
 
     accent = "#0f9d58" if fail_count == 0 else "#d93025"
-    headline = "GLaDOS 每日签到" if fail_count == 0 else "GLaDOS 签到异常"
+    if fail_count:
+        headline = "GLaDOS 签到异常"
+    elif ok_count == 0 and rep_count:
+        headline = "GLaDOS 今日已签"
+    else:
+        headline = "GLaDOS 每日签到"
 
     # 卡片里只放短标签，避免窄屏溢出
     engine_short = "求解服务" if engine.startswith("api") else "浏览器"
@@ -464,8 +469,17 @@ def push_pushplus(token: str, results: List[AccountResult], engine: str, log) ->
     import requests
 
     fail = sum(1 for r in results if not r.ok)
+    fresh = sum(1 for r in results if r.ok and not r.repeated)
     total = num(sum(r.gained or 0 for r in results))
-    title = f"GLaDOS 签到{'成功' if fail == 0 else f'异常({fail})'} · +{total}分"
+
+    # 标题要能一眼看懂状态：异常 > 新签到 > 全部已签
+    if fail:
+        title = f"GLaDOS 签到异常({fail}) · +{total}分"
+    elif fresh == 0:
+        title = "GLaDOS 今日已签 · 无需重复"
+    else:
+        gain = f"+{total}分" if total else f"{fresh} 个账号已签"
+        title = f"GLaDOS 签到成功 · {gain}"
     payload = {
         "token": token,
         "title": title,
