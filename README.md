@@ -1,86 +1,171 @@
-# Glados自动签到
+# Glados-Railgun-checkin
 
-> 基于 GitHub Actions 的 GLaDOS 自动签到工具，支持多账号与多通道推送（PushDeer / Server酱）。
+GLaDOS（Railgun）每日自动签到 + PushPlus 美化推送。
 
-## 文件结构
+站点在 2026 年给签到接入了 **Cloudflare Turnstile**，原来的纯 `requests` 脚本会被判 `code=5 turnstile`。
+本仓库改用 **Playwright 驱动真实 Chromium** 现场通过 Turnstile，再按站点前端完全一致的算法提交签到。
 
-```shell
-│  checkin.py          # 签到主脚本
-│  logging_config.py   # 日志配置（北京时间、[I/W/E] 短标签）
-│  requirements.txt    # Python 依赖
-│
-├─.github
-│  └─workflows
-│          gladosCheck.yml   # Actions 配置文件
+---
+
+## 1. 签到链路（逆向自站点前端）
+
+```
+GET  /api/user/checkin/challenge
+     -> { code:0, nonce, ttl:300000, turnstile:"0x4AAAAAAFF5pkT0bg7fX7nw", ip }
+
+Turnstile 组件（站点用 render 动态挂载）
+     sitekey    = 上面的 turnstile 字段
+     action     = "checkin"
+     cData      = nonce
+     appearance = "interaction-only"     # 正常情况下无需点击，自动通过
+
+POST /api/user/checkin
+     body = { token: location.hostname, nonce, proof, tsState, turnstile }
+     proof = sha256(nonce + ".glados-observe-v1")   # hex
 ```
 
-## 食用方式
+`proof` 的密钥 `glados-observe-v1` 来自站点 JS 里的字符码数组
+`[103,108,97,100,111,115,45,111,98,115,101,114,118,101,45,118,49]`。
 
-### 注册 GLaDOS 账号
+服务端返回码：
 
-注册地址：<https://glados.space/landing/0A58E-NV28S-6U3QV-33VMG>
+| code | reason | 含义 |
+|---|---|---|
+| 0 | – | 签到成功，`points` 为本次收益 |
+| 1 | – | 今日已签（`repeated: true`），不会重复计分 |
+| 4 | `device-mismatch` | 当前 UA 与登录设备不一致，返回 `loginDevice` / `currentDevice` |
+| 5 | `turnstile` | Cloudflare 校验未通过，`retryable: true`，**什么都没记录** |
 
-- 我的邀请码：[`0A58E-NV28S-6U3QV-33VMG`](https://0a58e-nv28s-6u3qv-33vmg.glados.space)
-- 我的优惠码（9 折）：[`DEVILSTORE`](https://0a58e-nv28s-6u3qv-33vmg.glados.space)
+> `code=5` 不会写入任何记录，所以可以安全重试。脚本默认重试 3 次。
 
-### Fork 本仓库
+---
 
-![图片加载失败](imgs/1.png)
+## 2. 为什么必须是 headful
 
-### 配置 Secrets
+| 模式 | 结果 |
+|---|---|
+| headless | Turnstile 拿不到 token（`tsState=error`），提交后 `code=5 turnstile` |
+| headful（真实桌面会话） | Turnstile 自动通过（`tsState=ok`），签到成功 |
 
-跳转至自己仓库的 `Settings` → `Secrets and variables` → `Action`，按需添加以下 `repository secret`：
+所以：
 
-#### 3.1 GLADOS_COOKIES（必填）
+- **GitHub Actions** 用 `windows-latest`（自带交互式桌面会话）原生 headful 运行；
+- **Linux** 需要 `xvfb-run`；
+- **本地**直接有头运行即可。
 
-对应 GLaDOS 账号 Cookie 中的有效部分，获取方式：
+## 3. device-mismatch 说明（重要）
 
-- 在 GLaDOS 签到页面按 `F12`，切换到 `Network` 页面下，刷新
-- 点击第一个请求，在 `Request Headers` 下找到 `Cookie`，右键复制其值即可
+站点会把**登录设备**与**当前设备**做比对，判定依据是 UA 里的操作系统：
 
-  > 参考格式：`koa:sess=eyJ1c2xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxAwMH0=; koa:sess.sig=xJkOxxxxxxxxxxxxxxxtnM;`
+```
+code=4 reason=device-mismatch  loginDevice=Windows  currentDevice=Linux   # xvfb + 默认 UA
+code=4 reason=device-mismatch  loginDevice=Android  currentDevice=Windows
+```
 
-- 多账号请在 `COOKIES` 中添加多个 cookies，中间使用 `&` 连接即可（例如：`c1&c2&c3`）
+因此 **cookie 必须来自与运行环境一致的登录**：
 
-![图片加载失败](imgs/2.png)
-![图片加载失败](imgs/3.png)
+- CI 跑 `windows-latest` → 用 **Windows 桌面 Chrome** 登录后抓的 cookie；
+- 若你是用手机（Android/iOS）登录的，请用桌面 Chrome 重新登录一次，再抓 cookie。
 
-#### 3.2 GLADOS_EXCHANGE_PLAN（非必填）
+> 只改 UA 不改 Client Hints 也能骗过设备检查，但 Turnstile 会因 UA 与
+> `navigator.userAgentData` 不一致而失败，所以**不要伪造**，直接让环境自洽。
 
-配置自动兑换积分策略：
+---
 
-| 值 | 积分要求 | 兑换天数 |
-|---|---------|---------|
-| `plan100` | 100 积分 | 10 天 |
-| `plan200` | 200 积分 | 30 天 |
-| `plan500` | 500 积分 | 100 天 |
+## 4. 部署（GitHub Actions）
 
-> 不配置时默认不进行自动兑换；如需兑换，设置 `GLADOS_EXCHANGE_PLAN` 为 `plan100` / `plan200` / `plan500`。
+1. Fork 本仓库。
+2. 仓库 **Settings → Secrets and variables → Actions → New repository secret**：
 
-#### 3.3 手机推送（非必填）
+   | Secret | 必填 | 说明 |
+   |---|---|---|
+   | `GLADOS_COOKIES` | ✅ | 一个或多个账号的 Cookie，多账号用 `&` 连接 |
+   | `PUSHPLUS_TOKEN` | 建议 | PushPlus token，不填则只打日志 |
 
-支持多个推送后端，可在 `Settings`→`Secrets and variables`→`Action` 中按需配置，**任一后端配置后即会推送，支持同时配置多个（都发）**：
+3. **Actions → auto check → Run workflow** 手动跑一次，确认日志出现
+   `返回 code=0/1` 与 `PushPlus 推送成功`。
+4. 之后按 `cron: '18 1,4 * * *'`（北京时间 09:18 / 12:18）自动执行。
 
-- **PushDeer**：添加 `repository secret` 命名为 `PUSHDEER_SENDKEY`，其值对应 PushDeer key（[获取地址](https://www.pushdeer.com/product.html)）。
-- **Server酱**：添加 `repository secret` 命名为 `SERVERCHAN_SENDKEY`，其值对应 Server酱 SendKey（[获取地址](https://sct.ftqq.com/)）。
+### Cookie 怎么取
 
-### Star 本仓库
+1. 桌面版 Chrome 打开 <https://glados.space/console> 并登录；
+2. `F12` → **Network** → 刷新页面 → 点任一 `glados.space` 请求；
+3. **Request Headers → Cookie**，复制 `gld:sess=...; gld:sess.sig=...; gld:accts=...; gld:accts.sig=...`；
+4. 多账号：每个账号单独按上面步骤取一份，用 `&` 拼成一行。
 
-![图片加载失败](imgs/4.png)
+```
+gld:sess=AAA; gld:sess.sig=BBB; gld:accts=CCC; gld:accts.sig=DDD&gld:sess=EEE; gld:sess.sig=FFF; ...
+```
 
-## 更新日志
+---
 
-- **2026-01**: 重构代码，添加日志输出方便定位，支持新版网址，支持配置积分兑换策略。
-- **2026-04**: 优化代码逻辑与日志输出，支持[新版域名](https://railgun.info)，在 `GLADOS_COOKIES` 中添加新版域名下的 cookies 即可使用。
-- **2026-09**: 设备平台自适应重试（无需手动配置 UA 即可自动恢复签到）；网络层自动重试与退避，降低 CI 网络抖动导致的误报失败；日志时间统一为北京时间，定时任务调整为北京时间每天 2 次并避开整点高峰；默认关闭自动兑换，需显式配置后才启用。
-- **2026-10**: 日志级别短标签 `[I]/[W]/[E]` ；推送兼容 Server酱（策略模式多后端「都发」），新增 `requirements.txt` 。
+## 5. 环境变量
 
-## 问题排查与定位
+| 变量 | 默认 | 说明 |
+|---|---|---|
+| `GLADOS_COOKIES` | – | 必填，cookie 串，多账号用 `&` 分隔 |
+| `PUSHPLUS_TOKEN` | – | PushPlus token |
+| `GLADOS_HEADLESS` | `0` | **保持 0**；设 1 会因 Turnstile 失败 |
+| `GLADOS_RETRY` | `3` | Turnstile/网络失败时的重试次数 |
+| `GLADOS_BROWSER_CHANNEL` | – | 本地可设 `chrome` 用系统 Chrome；CI 留空用 Playwright 自带 Chromium |
+| `GLADOS_UA` | – | 需要对齐登录设备时才用，一般留空 |
 
-大家可以通过查询 Actions 中的 running checkin 日志快速定位问题，有其他问题提交 issue。
+---
 
-  <img width="1684" height="844" alt="image" src="https://github.com/user-attachments/assets/45348a5f-43e4-45f5-8fdf-ce84d343b30d" />
+## 6. 本地运行
 
-## 声明
+```bash
+pip install -r requirements.txt
+python -m playwright install chromium
 
-本项目不保证稳定运行与更新，因 GitHub 相关规定可能会删库，请注意备份。
+# Windows PowerShell
+$env:GLADOS_COOKIES = "gld:sess=...; gld:sess.sig=..."
+$env:PUSHPLUS_TOKEN  = "your_token"
+python checkin.py
+```
+
+Linux 无桌面时：
+
+```bash
+xvfb-run -a --server-args="-screen 0 1440x900x24" python checkin.py
+```
+
+---
+
+## 7. 推送效果
+
+采用**手机优先**布局（PushPlus 主要在微信内置浏览器查看）：账号卡片式排列，
+四宫格指标、状态徽标、出口 IP 与原始返回信息分层展示，窄屏不会挤成一条缝。
+
+<img src="imgs/preview.png" width="330" alt="推送效果">
+
+---
+
+## 8. 常见问题
+
+**Q: 日志出现 `code=5 reason=turnstile`**
+说明 Turnstile 没通过。依次检查：是否 headful；CI 是否用 `windows-latest`；
+是否有 CDN/代理拦截 `challenges.cloudflare.com`；cookie 是否已过期。
+
+**Q: 日志出现 `code=4 reason=device-mismatch`**
+cookie 的登录设备与运行环境不一致。看日志里的 `loginDevice` / `currentDevice`，
+用与运行环境相同的设备重新登录并抓 cookie。
+
+**Q: 日志出现 `code=1 repeated: true`**
+今天已经签过了，属于正常情况，不会重复加分。
+
+**Q: 登录页能打开但按钮一直不出现**
+cookie 失效（被登出）。重新登录拿新 cookie。
+
+---
+
+## 9. 变更说明
+
+- **2026-11-26**：适配 Cloudflare Turnstile。改用 Playwright 真实 Chromium 通过
+  `action=checkin / cData=nonce / interaction-only` 校验；按前端算法补上
+  `proof = sha256(nonce + ".glados-observe-v1")`；推送后端改为 PushPlus，
+  并使用手机优先的卡片式排版；新增失败自动重试与 `device-mismatch` 诊断。
+
+## 免责声明
+
+仅供个人账号自动签到使用。请遵守站点服务条款，脚本自负风险。

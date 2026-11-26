@@ -1,4 +1,2 @@
-# GLaDOS 自动签到依赖
-requests
-pypushdeer
-serverchan-sdk
+playwright>=1.49.0
+requests>=2.31.0
