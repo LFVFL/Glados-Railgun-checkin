@@ -66,6 +66,7 @@ class AccountResult:
     plan: str = "-"
     traffic_used: str = "-"
     ip: str = "-"
+    email: str = ""
     message: str = ""
     reason: str = ""
     detail: Dict[str, Any] = field(default_factory=dict)
@@ -73,6 +74,11 @@ class AccountResult:
 
 def human_gb(n: float) -> str:
     return f"{n / 1024 ** 3:.2f} GB"
+
+
+def short_account(email: str) -> str:
+    """推送只显示邮箱 @ 之前的部分，窄屏不占位。"""
+    return (email or "").split("@", 1)[0].strip()
 
 
 def wait_for_button(page, log, timeout_s: int = 45) -> str:
@@ -314,6 +320,7 @@ def run_account(index: int, cookie_raw: str, headless: bool, log) -> AccountResu
     st = result.detail.get("status") or {}
     data = st.get("data") or {}
     if data:
+        result.email = str(data.get("email") or data.get("name") or "")
         result.days_left = data.get("daysLeft") or data.get("days_left") or data.get("remaining_days")
         vip = data.get("vip")
         if vip is not None:
@@ -415,10 +422,11 @@ def render_push_html(results: List[AccountResult], engine: str) -> str:
             for label, value, color_ in stats
         )
 
+        label = short_account(r.email) or f"账号 #{i}"
         cards.append(
             f"""<div style="border:1px solid #ececec;border-radius:10px;padding:12px 13px;margin:0 0 10px;background:#fff;">
   <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
-    <div style="font-size:14px;font-weight:700;color:#111;white-space:nowrap;">账号 #{i}</div>
+    <div style="font-size:14px;font-weight:700;color:#111;white-space:nowrap;">{label}</div>
     <div style="display:inline-block;padding:3px 9px;border-radius:99px;background:{bg};color:{color};font-size:11px;font-weight:600;white-space:nowrap;">{text}</div>
   </div>
   <div style="display:flex;flex-wrap:wrap;gap:0 8px;margin-top:6px;">
@@ -529,6 +537,7 @@ def result_from_api_dict(index: int, info: Dict[str, Any]) -> AccountResult:
     st = info.get("status") or {}
     data = st.get("data") or {}
     if data:
+        r.email = str(data.get("email") or data.get("name") or "")
         r.days_left = data.get("daysLeft") or data.get("days_left") or data.get("remaining_days")
         vip = data.get("vip")
         if vip is not None:
