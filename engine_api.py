@@ -280,6 +280,38 @@ def resolve_proxy() -> Optional[str]:
     return None
 
 
+def already_checked_in(s: requests.Session, log) -> Optional[Dict[str, Any]]:
+    """预检查：今天是否已签到。
+
+    每天 cron 跑两次是为了容错，但已签的账号再求解一次就会白扣一次额度，
+    所以先看 /api/user/points 的 history 里有没有今天的 system:checkin 记录。
+    查询失败时返回 None，让调用方照常走完整流程（绝不因为查不到就误判已签）。
+    """
+    try:
+        pts = s.get(SITE + "/api/user/points", timeout=30).json()
+    except Exception as exc:
+        log(f"  预检查积分失败（继续正常签到）: {str(exc)[:80]}")
+        return None
+
+    if pts.get("code") not in (0, None):
+        return None
+
+    today = time.strftime("%Y-%m-%d")
+    today_rows = [
+        row for row in (pts.get("history") or [])
+        if row.get("business") == "system:checkin" and str(row.get("detail")) == today
+    ]
+    if not today_rows:
+        return None
+
+    gained = None
+    try:
+        gained = float(today_rows[0].get("change"))
+    except (TypeError, ValueError):
+        pass
+    return {"points": pts, "gained": gained}
+
+
 def run_account(index: int, cookie_raw: str, provider: str, api_key: str, log) -> Dict[str, Any]:
     """返回与浏览器引擎一致的字典结构，便于统一渲染/推送。"""
     log(f"开始处理账号 #{index}（api 引擎 / {provider}）")
@@ -328,6 +360,21 @@ def run_account(index: int, cookie_raw: str, provider: str, api_key: str, log) -
             break
 
         info["ip"] = ch.get("ip") or info["ip"]
+
+        # 已签到就不必再花一次求解额度（每天两次 cron 的第二次基本都走这里）
+        done = already_checked_in(s, log)
+        if done:
+            log(f"  今日已签到（历史已得 +{done.get('gained')} 分，本次不重复加分），跳过求解")
+            info["checkin"] = {"code": 1, "repeated": True,
+                               "message": "今天已有签到记录"}
+            info["mismatch"] = None
+            info["points"] = done["points"]
+            info["skipped_solve"] = True
+            try:
+                info["status"] = s.get(SITE + "/api/user/status", timeout=30).json()
+            except Exception:
+                pass
+            return info
 
         # 前端会等 nonce 生成后 >= 2500ms 再提交
         time.sleep(2.6)
