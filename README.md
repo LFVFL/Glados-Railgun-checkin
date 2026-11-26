@@ -152,6 +152,7 @@ gld:sess=AAA; gld:sess.sig=BBB; gld:accts=CCC; gld:accts.sig=DDD&gld:sess=EEE; g
 | `PUSHPLUS_TOKEN` | – | PushPlus token |
 | `TURNSTILE_PROVIDER` | – | 求解服务：`capsolver` / `yescaptcha` / `2captcha`（配置后走 api 引擎） |
 | `TURNSTILE_API_KEY` | – | 求解服务 API Key |
+| `GLADOS_PROXY` | – | 出口代理，`http://user:pass@host:port` 或 `socks5://host:port`。**IP 被限流时填这个最有效** |
 | `GLADOS_HEADLESS` | `0` | browser 引擎必须 `0`；`1` 会因 Turnstile 拿不到 token 失败 |
 | `GLADOS_RETRY` | `3` | browser 引擎失败重试次数 |
 | `GLADOS_BROWSER_CHANNEL` | – | 本地可设 `chrome` 用系统 Chrome；CI 留空用 Playwright 自带 Chromium |
@@ -199,10 +200,11 @@ xvfb-run -a --server-args="-screen 0 1440x900x24" python checkin.py
 
 - 出现 `400 .../cdn-cgi/challenge-platform/...`：**当前出口 IP 被 Cloudflare 限流**。
   这是最常见的故障——同一个 IP 在 Cloudflare 眼里“可疑”时，challenge 端点直接 400，
-  widget 不会渲染，签到请求根本发不出去。换网络（家宽 ↔ 手机热点）、
-  换代理出口、等几小时后冷却，或改用 `api` 引擎（求解服务自带干净出口）。
+  widget 不会渲染，签到请求根本发不出去。
+  **首选对策：配 `GLADOS_PROXY` 换个干净出口**，其次换网络（家宽 ↔ 手机热点）、
+  等几小时冷却，或改用 `api` 引擎（求解服务自带干净出口）。
   用第三方 Turnstile 演示页（如 `nopecha.com/demo/turnstile`）也能复现 400，
-  说明与本脚本、与 glados 都无关。
+  说明与本脚本、与 glados 都无关（用代理访问该演示页可反向确认代理是否干净）。
 - 出现 `failed net::ERR_...`：本地网络/代理/DNS 拦了 `challenges.cloudflare.com`。
 - 什么都没打印：页面没加载完，检查 cookie 是否已失效。
 
