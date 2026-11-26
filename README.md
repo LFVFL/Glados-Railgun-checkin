@@ -125,6 +125,23 @@ code=4 reason=device-mismatch  loginDevice=Android  currentDevice=Windows
    `返回 code=0/1` 与 `PushPlus 推送成功`。
 4. 之后按 `cron: '18 1,4 * * *'`（北京时间 09:18 / 12:18）自动执行。
 
+多账号签到结果里，每张卡片的标题是**邮箱 `@` 之前的部分**（如 `demo.alice`、`demo.bob`、`demo.carol`），
+一眼就能对上是谁，不显示域名后缀以节省窄屏宽度；取不到邮箱时回退成 `账号 #N`。
+
+> 每天跑两次是冗余设计：第一次若遇到网络/求解抖动，第二次还能补上；
+> 已经签过的账号会返回 `code=1`，不重复加分。`peak` 每次求解都会计费，
+> 1000 次免费额度约够 500 天（2 次/天）。
+
+### 实测验证记录（2026-11-26）
+
+| 环节 | 结果 |
+|---|---|
+| 本地 `peak` 求解 → 提交 | **`code=0 Checkin! Got 2 Points`**（`demo.alice@example.com` +2 分） |
+| 本地 PushPlus 推送 | 成功，标题 `GLaDOS 签到成功 · +2分` |
+| GitHub Actions api 引擎（单账号） | `code=1 repeated=True`，`PushPlus 推送成功`，run success |
+| GitHub Actions api 引擎（三账号） | `成功 0 · 已签 3 · 失败 0`，其中一账号自动走 `code=4 → android UA` 重试成功 |
+| 推送标题三态 | 已签 → `GLaDOS 今日已签 · 无需重复`；新签 → `签到成功 · +N分`；失败 → `签到异常(N)` |
+
 ### 求解服务怎么配
 
 **Peak（推荐，本项目实测跑通）**：在 <https://peak.fo/dashboard/keys> 注册，新账号送 1000 次免费，
@@ -250,6 +267,12 @@ cookie 失效（被登出）。重新登录拿新 cookie。
   - 两个引擎都支持 `GLADOS_PROXY`（`session.proxies` / Playwright `proxy`），
     代理不可用时明确报错而非静默失败；
   - 出口 IP 被 Cloudflare 限流时（challenge 端点 400）立即放弃本轮重试，避免情况恶化。
+- **2026-11-26（三）**：多账号可辨识 + 推送标题三态化。
+  - 推送卡片标题由 `账号 #N` 改为邮箱前缀（读 `/api/user/status` 的 `data.email`，
+    只保留 `@` 前部分），多账号不再需要人工对数；
+  - 推送标题区分「今日已签 / 签到成功 +N分 / 签到异常(N)」，
+    不再出现「签到成功 · +0分」这种看起来像刚签过的误导文案；
+  - `AccountResult` 新增 `email` 字段，两个引擎都会填充。
 
 ## 免责声明
 
