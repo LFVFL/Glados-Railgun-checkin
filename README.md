@@ -1,12 +1,122 @@
 # Glados-Railgun-checkin
 
-GLaDOS（Railgun）每日自动签到 + PushPlus 美化推送。
+GLaDOS（Railgun）每日自动签到 + PushPlus 手机美化推送。**配好之后不用管，每天自动跑。**
 
 站点在 2026 年给签到接入了 **Cloudflare Turnstile**，原来的纯 `requests` 脚本会被判 `code=5 turnstile`。
-本仓库改用 **Playwright 驱动真实 Chromium** 现场通过 Turnstile，再按站点前端完全一致的算法提交签到。
+本仓库的做法是：用 **Peak Solutions 求解服务**拿到 Turnstile token，再按站点前端完全一致的算法提交签到。
+不需要浏览器、不需要自己的电脑开机，GitHub 免费额度就够。
+
+![推送效果](imgs/preview.png)
+
+> 上图账号与 IP 均为虚构示例。
 
 ---
 
+## 0. 三分钟上手（照这个顺序做就行）
+
+如果你是第一次用，**只看这一节就够了**。全程不需要装任何软件。
+
+### 第 1 步：Fork 这个仓库
+
+点右上角 **Fork** → 保持默认 → **Create fork**。
+（你自己的仓库才能存自己的 Cookie 和密钥。）
+
+### 第 2 步：注册 Peak Solutions，拿一个 key
+
+1. 打开 <https://peak.fo>，用邮箱注册（**新账号送 1000 次免费求解**，够用很久）；
+2. 登录后进 **Dashboard → API Keys**，创建一个 key；
+3. 复制那串以 `pk_` 开头的字符串，先存到记事本里。
+
+> 为什么用它：签到时站点要验证 Cloudflare Turnstile，而这个验证必须由「像真人」的客户端完成。
+> Peak 就是干这个的，几秒返回 token，不需要你本机跑浏览器。
+> 单次求解约 $0.001，1000 次免费额度按「每账号每天 1 次」算够用很久（脚本会先查今天是否已签，已签不花钱）。
+
+### 第 3 步：取 Cookie（最关键的一步，慢一点没关系）
+
+1. 电脑上用 **Chrome** 打开 <https://glados.space/console> 并登录你的账号；
+2. 按 **F12** 打开开发者工具 → 切到 **Network（网络）** 标签；
+3. 按 **F5** 刷新页面；
+4. 在请求列表里点任意一条 `glados.space` 开头的请求；
+5. 右侧找到 **Request Headers（请求标头）** → 找 **Cookie** 那一行；
+6. 把这一行的**完整内容**复制出来。长这样：
+
+```
+gld:sess=AAAA...; gld:sess.sig=BBBB...; gld:accts=CCCC...; gld:accts.sig=DDDD...
+```
+
+> 一定要把 `gld:sess`、`gld:sess.sig`、`gld:accts`、`gld:accts.sig` **四段全带上**，少一段就会登录失败。
+> 复制的时候不要带 `Cookie:` 这个前缀，只要冒号后面的值。
+
+**多个账号怎么弄**：每个账号分别按上面步骤取一份，然后用 `&` 拼成一行：
+
+```
+gld:sess=账号1...; gld:sess.sig=账号1...&gld:sess=账号2...; gld:sess.sig=账号2...&gld:sess=账号3...; ...
+```
+
+推送里会用**邮箱 `@` 前面的部分**做标题（比如 `alice`、`bob`），一眼就能对上是谁。
+
+### 第 4 步：注册 PushPlus，拿推送 token
+
+1. 打开 <https://www.pushplus.plus>，微信扫码登录；
+2. 首页能看到你的一串 **token**（32 位），复制下来；
+3. 关注它的微信公众号，这样推送会直接发到微信。
+
+**想同时推给好几个人**：在里面建一个「群组」把大家都加进去，用**群组 token** 即可；
+或者直接把多串 token 用 `&` 拼起来填进 secret（脚本会逐个推送同一份内容）。
+
+### 第 5 步：把上面拿到的值填进 GitHub Secrets
+
+进你自己的仓库 → **Settings（设置）** → 左侧 **Secrets and variables** → **Actions**
+→ 右上 **New repository secret**，依次添加下面三条：
+
+| Name（名字，必须一字不差） | Secret（值） |
+|---|---|
+| `GLADOS_COOKIES` | 第 3 步复制的 Cookie（多账号用 `&` 连接） |
+| `PUSHPLUS_TOKEN` | 第 4 步的 PushPlus token（多个用 `&` 连接） |
+| `TURNSTILE_PROVIDER` | 固定填 `peak` |
+| `TURNSTILE_API_KEY` | 第 2 步的 `pk_...` key |
+
+> 注意：**Name 是区分大小写的**，必须和上表完全一致。值直接粘贴，不要加引号。
+
+### 第 6 步：手动跑一次，确认成功
+
+1. 点仓库上方 **Actions** 标签；
+2. 左侧选 **auto check**；
+3. 右边点 **Run workflow** → **Run workflow**；
+4. 等约 1 分钟，点进这次运行，看日志里出现：
+
+```
+共 3 个账号 · 引擎=api(peak)
+返回 code=0 reason=None repeated=False
+汇总: 成功 1 · 已签 2 · 失败 0 · 本次 +2 分
+PushPlus 推送成功 [1/1]: GLaDOS 签到成功 · +2分
+```
+
+看到 `code=0`（新签到）或 `code=1`（今天已签过，正常）就说明通了，同时微信会收到推送。
+
+### 第 7 步：什么都不用做了
+
+默认每天自动跑两次（北京时间 **09:18** 和 **12:18**）。
+第二次是兜底：如果第一次因为网络抖动失败，第二次还能补上；已经签过的账号不会重复加分，
+而且**不会重复消耗求解额度**（脚本先查签到记录，已签就跳过）。
+
+---
+
+## 0.1 常见卡住的点（新手必看）
+
+| 现象 | 原因与解法 |
+|---|---|
+| 日志 `code=4 reason=device-mismatch` | UA 和登录设备不一致。脚本会**自动**按 `loginDevice` 换 UA 重试，看到这条后紧跟着 `code=0/1` 就属于正常过程 |
+| 日志 `code=5 reason=turnstile` | 求解服务返回的 token 被拒。**先确认 `action=checkin` 和 `cdata=nonce` 都传了**（本仓库已内置）；仍失败再换 provider 或换网络 |
+| 日志 `code=1 repeated=True`，`本次 +0 分` | 今天已经签过了，**正常**，不是失败 |
+| `缺少 GLADOS_COOKIES` | 第 5 步的 secret 名字拼错了，或值留空 |
+| 推送标题是 `GLaDOS 今日已签` | 三个账号今天都签过了，正常 |
+| 连续 / 剩余 显示 `—` | 站点没返回对应字段；一般刷新一次就好，不影响签到 |
+| 微信收不到推送 | PushPlus 里没关注公众号，或 token 填错；去 PushPlus 后台看「发送记录」 |
+| 想改执行时间 | 改 `.github/workflows/gladosCheck.yml` 里的 `cron: '18 1,4 * * *'`（**UTC 时间**，北京时间 = UTC+8） |
+| Actions 到点没跑 | GitHub 的定时任务高峰期会延迟几分钟到半小时，属正常；可以点 Run workflow 手动补一次 |
+
+---
 ## 1. 签到链路（逆向自站点前端）
 
 ```
@@ -115,7 +225,7 @@ code=4 reason=device-mismatch  loginDevice=Android  currentDevice=Windows
    | Secret | 必填 | 说明 |
    |---|---|---|
    | `GLADOS_COOKIES` | ✅ | 一个或多个账号的 Cookie，多账号用 `&` 连接 |
-   | `PUSHPLUS_TOKEN` | 建议 | PushPlus token，不填则只打日志 |
+   | `PUSHPLUS_TOKEN` | 建议 | PushPlus token。**多接收方用 `&` 连接**（如 `tokA&tokB`），会逐个推送同一份内容；不填则只打日志 |
    | `TURNSTILE_PROVIDER` | 推荐 | `peak` / `capsolver` / `yescaptcha` / `2captcha` |
    | `TURNSTILE_API_KEY` | 推荐 | 求解服务的 API Key |
 
@@ -176,7 +286,7 @@ gld:sess=AAA; gld:sess.sig=BBB; gld:accts=CCC; gld:accts.sig=DDD&gld:sess=EEE; g
 | 变量 | 默认 | 说明 |
 |---|---|---|
 | `GLADOS_COOKIES` | – | 必填，cookie 串，多账号用 `&` 分隔 |
-| `PUSHPLUS_TOKEN` | – | PushPlus token |
+| `PUSHPLUS_TOKEN` | – | PushPlus token，多接收方用 `&` / `,` / `;` / 空白分隔，自动去重，逐个推送相同内容 |
 | `TURNSTILE_PROVIDER` | – | 求解服务：`peak` / `capsolver` / `yescaptcha` / `2captcha`（配置后走 api 引擎） |
 | `TURNSTILE_API_KEY` | – | 求解服务 API Key |
 | `GLADOS_PROXY` | – | 出口代理，`http://user:pass@host:port` 或 `socks5://host:port`。**IP 被限流时填这个最有效** |
@@ -217,6 +327,13 @@ xvfb-run -a --server-args="-screen 0 1440x900x24" python checkin.py
 四宫格指标、状态徽标、出口 IP 与原始返回信息分层展示，窄屏不会挤成一条缝。
 
 <img src="imgs/preview.png" width="330" alt="推送效果">
+
+- 卡片标题 = 该账号邮箱 @ 之前的部分（下图中的 demo.alice 等均为**虚构示例**）；
+- 状态徽标三种：签到成功（绿）/ 今日已签（蓝）/ 失败时为红色；
+- 本次 / 总积分 / 连续天数 / 剩余天数 四项指标；
+- 底部是出口 IP 与站点原始返回信息，便于排查。
+
+> 截图中的账号名、积分、IP（203.0.113.10 是文档专用保留网段）全部为假数据。
 
 ---
 
@@ -283,6 +400,14 @@ cookie 失效（被登出）。重新登录拿新 cookie。
   - 查询失败（网络/接口异常）时返回 `None` 并继续完整流程，
     不会因为查不到就误判成「已签」而漏签；
   - 每天两次 cron 的意义由此变为纯冗余：第一次签到，第二次只是兜底。
+- **2026-11-26（五）**：多接收方推送 + 字段修正 + 新手文档。
+  - `PUSHPLUS_TOKEN` 支持填多个 token（`&` / `,` / `;` / 空白分隔），
+    自动去重后逐个推送**同一份内容**；单个 token 失效只影响它自己，其余照常送达；
+  - 修正两处字段名：剩余天数实际在 `status.data.leftDays`（不是 `daysLeft`）、
+    连续天数在 `points.streak`（不是签到返回里），此前这两项一直显示 `—`；
+  - 仓库预览图改用虚构账号（`demo.alice` / `demo.bob` / `demo.carol`）
+    与文档专用 IP `203.0.113.10`，不再暴露真实邮箱前缀；
+  - README 新增「三分钟上手」7 步教程和「常见卡住的点」对照表，面向前端零基础用户。
 
 ## 免责声明
 

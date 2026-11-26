@@ -72,6 +72,17 @@ class AccountResult:
     detail: Dict[str, Any] = field(default_factory=dict)
 
 
+def to_number(val, cast=None):
+    """把 '342.0000000000000000' 这类字符串安全转成数字，失败返回 None。"""
+    if val in (None, "", "-"):
+        return None
+    try:
+        f = float(val)
+    except (TypeError, ValueError):
+        return None
+    return int(f) if cast is int else f
+
+
 def human_gb(n: float) -> str:
     return f"{n / 1024 ** 3:.2f} GB"
 
@@ -321,7 +332,7 @@ def run_account(index: int, cookie_raw: str, headless: bool, log) -> AccountResu
     data = st.get("data") or {}
     if data:
         result.email = str(data.get("email") or data.get("name") or "")
-        result.days_left = data.get("daysLeft") or data.get("days_left") or data.get("remaining_days")
+        result.days_left = to_number(data.get("leftDays") or data.get("daysLeft") or data.get("days_left") or data.get("remaining_days"), int)
         vip = data.get("vip")
         if vip is not None:
             result.plan = str(vip)
@@ -335,8 +346,10 @@ def run_account(index: int, cookie_raw: str, headless: bool, log) -> AccountResu
             result.points = float(pts["points"])
         except (TypeError, ValueError):
             pass
-    if body.get("streak") is not None:
-        result.streak = body["streak"]
+    # 连续天数在 points.streak（不是 checkin 的返回里）
+    result.streak = to_number(pts.get("streak"), int)
+    if result.streak is None and body.get("streak") is not None:
+        result.streak = to_number(body["streak"], int)
 
     history = pts.get("history") or []
     if history and not result.repeated:
@@ -473,6 +486,18 @@ def render_push_html(results: List[AccountResult], engine: str) -> str:
 </div>"""
 
 
+def split_tokens(raw: str) -> List[str]:
+    '多 token 支持：用 & , ; 空白 任一分割，去重保序。'
+    import re
+    seen, out = set(), []
+    for tok in re.split(r'[&,;\s]+', raw or ''):
+        tok = tok.strip()
+        if tok and tok not in seen:
+            seen.add(tok)
+            out.append(tok)
+    return out
+
+
 def push_pushplus(token: str, results: List[AccountResult], engine: str, log) -> None:
     import requests
 
@@ -489,20 +514,34 @@ def push_pushplus(token: str, results: List[AccountResult], engine: str, log) ->
         gain = f"+{total}分" if total else f"{fresh} 个账号已签"
         title = f"GLaDOS 签到成功 · {gain}"
     payload = {
-        "token": token,
         "title": title,
         "content": render_push_html(results, engine),
         "template": "html",
     }
-    try:
-        resp = requests.post("https://www.pushplus.plus/send", json=payload, timeout=30)
-        data = resp.json()
-        if data.get("code") == 200:
-            log(f"PushPlus 推送成功: {title}")
-        else:
-            log(f"PushPlus 推送失败: {data}")
-    except Exception as exc:
-        log(f"PushPlus 推送异常: {exc}")
+    tokens = split_tokens(token)
+    if not tokens:
+        log("PushPlus token 为空，跳过推送")
+        return
+
+    content = payload["content"]
+    ok = 0
+    for i, tok in enumerate(tokens, 1):
+        try:
+            resp = requests.post("https://www.pushplus.plus/send",
+                                 json={"token": tok, "title": title,
+                                       "content": content, "template": "html"},
+                                 timeout=30)
+            data = resp.json()
+            if data.get("code") == 200:
+                ok += 1
+                log(f"PushPlus 推送成功 [{i}/{len(tokens)}]: {title}")
+            else:
+                log(f"PushPlus 推送失败 [{i}/{len(tokens)}]: {data}")
+        except Exception as exc:
+            log(f"PushPlus 推送异常 [{i}/{len(tokens)}]: {exc}")
+
+    if ok != len(tokens):
+        log(f"PushPlus 共 {len(tokens)} 个接收方，成功 {ok} 个")
 
 
 def result_from_api_dict(index: int, info: Dict[str, Any]) -> AccountResult:
@@ -538,7 +577,7 @@ def result_from_api_dict(index: int, info: Dict[str, Any]) -> AccountResult:
     data = st.get("data") or {}
     if data:
         r.email = str(data.get("email") or data.get("name") or "")
-        r.days_left = data.get("daysLeft") or data.get("days_left") or data.get("remaining_days")
+        r.days_left = to_number(data.get("leftDays") or data.get("daysLeft") or data.get("days_left") or data.get("remaining_days"), int)
         vip = data.get("vip")
         if vip is not None:
             r.plan = str(vip)
@@ -549,6 +588,8 @@ def result_from_api_dict(index: int, info: Dict[str, Any]) -> AccountResult:
             r.points = float(pts["points"])
         except (TypeError, ValueError):
             pass
+    # 连续天数在 points.streak
+    r.streak = to_number(pts.get("streak"), int)
 
     history = pts.get("history") or []
     if history and not r.repeated:
