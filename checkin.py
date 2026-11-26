@@ -421,14 +421,76 @@ def push_pushplus(token: str, results: List[AccountResult], headless: bool, log)
         log(f"PushPlus 推送异常: {exc}")
 
 
+def result_from_api_dict(index: int, info: Dict[str, Any]) -> AccountResult:
+    """把 api 引擎返回的 dict 转成统一的 AccountResult。"""
+    r = AccountResult()
+    body = info.get("checkin") or {}
+    r.detail = info
+
+    code = body.get("code")
+    r.repeated = bool(body.get("repeated"))
+    r.message = str(body.get("message") or "").strip()
+    r.reason = str(body.get("reason") or "")
+    r.ok = bool(code in (0, 1) or r.repeated)
+    if not r.ok:
+        mis = info.get("mismatch") or {}
+        if mis:
+            r.message = f"设备不匹配：登录={mis.get('loginDevice')} 当前={mis.get('currentDevice')}"
+        elif not r.message:
+            r.message = "签到未完成"
+
+    if body.get("points") is not None:
+        try:
+            r.points = float(body["points"])
+        except (TypeError, ValueError):
+            pass
+    if body.get("streak") is not None:
+        r.streak = body["streak"]
+
+    if info.get("ip"):
+        r.ip = info["ip"]
+
+    st = info.get("status") or {}
+    data = st.get("data") or {}
+    if data:
+        r.days_left = data.get("daysLeft") or data.get("days_left") or data.get("remaining_days")
+        vip = data.get("vip")
+        if vip is not None:
+            r.plan = str(vip)
+
+    pts = info.get("points") or {}
+    if pts.get("points") is not None:
+        try:
+            r.points = float(pts["points"])
+        except (TypeError, ValueError):
+            pass
+
+    history = pts.get("history") or []
+    if history and not r.repeated:
+        today = time.strftime("%Y-%m-%d")
+        for row in history:
+            if row.get("business") == "system:checkin" and str(row.get("detail")) == today:
+                try:
+                    r.gained = float(row.get("change"))
+                except (TypeError, ValueError):
+                    pass
+                break
+
+    log_line = (f"账号 #{index} 结果: code={code} reason={r.reason or '-'} "
+                f"points={r.points} message={r.message[:60]!r}")
+    return r
+
+
 # ---------------------------------------------------------------- main
 
 def main() -> int:
-    # Turnstile 在 headless 下拿不到 token（tsState=error），默认必须 headful。
-    # CI 用虚拟显示（Windows runner 自带桌面会话，Linux 用 xvfb-run）。
+    # Turnstile 在 headless 下拿不到 token（tsState=error），浏览器引擎必须 headful。
+    # 无桌面的 CI 请用 api 引擎：TURNSTILE_PROVIDER + TURNSTILE_API_KEY。
     headless = os.environ.get("GLADOS_HEADLESS", "0").lower() in ("1", "true", "yes")
     raw_cookies = os.environ.get("GLADOS_COOKIES", "").strip()
     push_token = os.environ.get("PUSHPLUS_TOKEN", "").strip()
+    provider = os.environ.get("TURNSTILE_PROVIDER", "").strip().lower()
+    api_key = os.environ.get("TURNSTILE_API_KEY", "").strip()
 
     def log(msg: str) -> None:
         print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
@@ -437,13 +499,21 @@ def main() -> int:
         log("缺少 GLADOS_COOKIES")
         return 1
 
+    use_api = bool(provider and api_key)
+    engine = f"api({provider})" if use_api else "browser"
     cookies = [c.strip() for c in raw_cookies.split("&") if c.strip()]
-    log(f"共 {len(cookies)} 个账号 · headless={headless} · 站点={CONSOLE_URL}")
+    log(f"共 {len(cookies)} 个账号 · 引擎={engine} · headless={headless} · 站点={CONSOLE_URL}")
 
     results: List[AccountResult] = []
     for i, cookie in enumerate(cookies, 1):
         try:
-            results.append(run_account(i, cookie, headless, log))
+            if use_api:
+                import engine_api
+
+                info = engine_api.run_account(i, cookie, provider, api_key, log)
+                results.append(result_from_api_dict(i, info))
+            else:
+                results.append(run_account(i, cookie, headless, log))
         except Exception as exc:
             log(f"账号 #{i} 异常: {str(exc)[:160]}")
             results.append(AccountResult(ok=False, message=str(exc)[:200], reason="exception"))

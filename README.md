@@ -40,39 +40,58 @@ POST /api/user/checkin
 
 ---
 
-## 2. 为什么必须是 headful
+## 2. 两种引擎（关键）
 
-| 模式 | 结果 |
-|---|---|
-| headless | Turnstile 拿不到 token（`tsState=error`），提交后 `code=5 turnstile` |
-| headful（真实桌面会话） | Turnstile 自动通过（`tsState=ok`），签到成功 |
+Cloudflare Turnstile 是**反自动化**组件，token 只能由真实、非自动化的浏览器产生。实测：
 
-所以：
+| 运行环境 | 引擎 | 结果 |
+|---|---|---|
+| 本地真实桌面（Windows/macOS） | browser（headful） | ✅ 自动通过，签到成功 |
+| GitHub 托管 runner（无 GPU 虚拟机） | browser（headful） | ❌ widget 不完成，`code=None` |
+| 任意环境 | browser（headless） | ❌ `tsState=error`，`code=5 turnstile` |
 
-- **GitHub Actions** 用 `windows-latest`（自带交互式桌面会话）原生 headful 运行；
-- **Linux** 需要 `xvfb-run`；
-- **本地**直接有头运行即可。
+因此脚本提供 **两个引擎**：
 
-## 3. device-mismatch 说明（重要）
+### 引擎 A：`api`（CI 推荐）
 
-站点会把**登录设备**与**当前设备**做比对，判定依据是 UA 里的操作系统：
+纯 HTTP，不需要浏览器：先由**Turnstile 求解服务**拿 token，再按前端同样的算法提交。
 
 ```
-code=4 reason=device-mismatch  loginDevice=Windows  currentDevice=Linux   # xvfb + 默认 UA
+challenge -> 求解服务(sitekey + pageurl + action=checkin + cdata=nonce) -> token
+          -> proof = sha256(nonce + ".glados-observe-v1") -> POST /api/user/checkin
+```
+
+支持 `capsolver` / `yescaptcha` / `2captcha`。内置 **UA 自动对齐**：遇到 `code=4 device-mismatch`
+会读取 `loginDevice` 并自动切换到对应系统 UA 重试，所以 Windows / Android / iOS / macOS 的 cookie 都能用。
+
+### 引擎 B：`browser`（本地 / 自建 runner 推荐）
+
+Playwright 驱动真实 Chromium（headful）现场通过 Turnstile，**只有在真实桌面环境才有效**。
+
+> 选择逻辑：配置了 `TURNSTILE_PROVIDER` + `TURNSTILE_API_KEY` 走 `api`，否则走 `browser`。
+
+## 3. 三种落地方式
+
+| 方案 | 成本 | 稳定性 | 说明 |
+|---|---|---|---|
+| **① 求解服务 + GitHub Actions** | 约 ¥0.01~0.05/次 | ⭐⭐⭐⭐⭐ | 推荐，配两个 secret 即可 |
+| **② 自建 runner（自己的电脑/NAS/软路由）** | 免费 | ⭐⭐⭐⭐⭐ | 改 `runs-on: self-hosted`，有真实桌面，browser 引擎必过 |
+| **③ GitHub 托管 runner + browser 引擎** | 免费 | ⭐ | 实测过不了 Turnstile，**不推荐** |
+
+## 4. device-mismatch 说明
+
+站点把**登录设备**与**当前设备**比对，依据是 UA 里的操作系统：
+
+```
 code=4 reason=device-mismatch  loginDevice=Android  currentDevice=Windows
 ```
 
-因此 **cookie 必须来自与运行环境一致的登录**：
-
-- CI 跑 `windows-latest` → 用 **Windows 桌面 Chrome** 登录后抓的 cookie；
-- 若你是用手机（Android/iOS）登录的，请用桌面 Chrome 重新登录一次，再抓 cookie。
-
-> 只改 UA 不改 Client Hints 也能骗过设备检查，但 Turnstile 会因 UA 与
-> `navigator.userAgentData` 不一致而失败，所以**不要伪造**，直接让环境自洽。
+- `api` 引擎会按 `loginDevice` 自动切换 UA；
+- `browser` 引擎要求运行环境与登录设备一致（如都用 Windows 桌面 Chrome）。
 
 ---
 
-## 4. 部署（GitHub Actions）
+## 5. 部署（GitHub Actions）
 
 1. Fork 本仓库。
 2. 仓库 **Settings → Secrets and variables → Actions → New repository secret**：
@@ -81,10 +100,25 @@ code=4 reason=device-mismatch  loginDevice=Android  currentDevice=Windows
    |---|---|---|
    | `GLADOS_COOKIES` | ✅ | 一个或多个账号的 Cookie，多账号用 `&` 连接 |
    | `PUSHPLUS_TOKEN` | 建议 | PushPlus token，不填则只打日志 |
+   | `TURNSTILE_PROVIDER` | 推荐 | `capsolver` / `yescaptcha` / `2captcha` |
+   | `TURNSTILE_API_KEY` | 推荐 | 求解服务的 API Key |
+
+   > 不配 `TURNSTILE_*` 时走浏览器引擎；GitHub 托管 runner 上过不了 Turnstile（见第 2 节）。
 
 3. **Actions → auto check → Run workflow** 手动跑一次，确认日志出现
    `返回 code=0/1` 与 `PushPlus 推送成功`。
 4. 之后按 `cron: '18 1,4 * * *'`（北京时间 09:18 / 12:18）自动执行。
+
+### 求解服务怎么配
+
+以 CapSolver 为例：注册后在后台拿 `clientKey`，然后：
+
+```
+TURNSTILE_PROVIDER = capsolver
+TURNSTILE_API_KEY  = CAP-xxxxxxxxxxxxxxxx
+```
+
+YesCaptcha / 2Captcha 同理，把 provider 换成对应名字即可（脚本已内置三家的 createTask/getTaskResult 流程）。
 
 ### Cookie 怎么取
 
@@ -99,32 +133,38 @@ gld:sess=AAA; gld:sess.sig=BBB; gld:accts=CCC; gld:accts.sig=DDD&gld:sess=EEE; g
 
 ---
 
-## 5. 环境变量
+## 6. 环境变量
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
 | `GLADOS_COOKIES` | – | 必填，cookie 串，多账号用 `&` 分隔 |
 | `PUSHPLUS_TOKEN` | – | PushPlus token |
-| `GLADOS_HEADLESS` | `0` | **保持 0**；设 1 会因 Turnstile 失败 |
-| `GLADOS_RETRY` | `3` | Turnstile/网络失败时的重试次数 |
+| `TURNSTILE_PROVIDER` | – | 求解服务：`capsolver` / `yescaptcha` / `2captcha`（配置后走 api 引擎） |
+| `TURNSTILE_API_KEY` | – | 求解服务 API Key |
+| `GLADOS_HEADLESS` | `0` | browser 引擎必须 `0`；`1` 会因 Turnstile 拿不到 token 失败 |
+| `GLADOS_RETRY` | `3` | browser 引擎失败重试次数 |
 | `GLADOS_BROWSER_CHANNEL` | – | 本地可设 `chrome` 用系统 Chrome；CI 留空用 Playwright 自带 Chromium |
-| `GLADOS_UA` | – | 需要对齐登录设备时才用，一般留空 |
 
 ---
 
-## 6. 本地运行
+## 7. 本地运行
 
 ```bash
 pip install -r requirements.txt
 python -m playwright install chromium
 
-# Windows PowerShell
+# Windows PowerShell（browser 引擎）
 $env:GLADOS_COOKIES = "gld:sess=...; gld:sess.sig=..."
 $env:PUSHPLUS_TOKEN  = "your_token"
 python checkin.py
+
+# 或者用 api 引擎（无需浏览器）
+$env:TURNSTILE_PROVIDER = "capsolver"
+$env:TURNSTILE_API_KEY  = "CAP-xxxx"
+python checkin.py
 ```
 
-Linux 无桌面时：
+Linux 无桌面时（browser 引擎）：
 
 ```bash
 xvfb-run -a --server-args="-screen 0 1440x900x24" python checkin.py
@@ -132,7 +172,7 @@ xvfb-run -a --server-args="-screen 0 1440x900x24" python checkin.py
 
 ---
 
-## 7. 推送效果
+## 8. 推送效果
 
 采用**手机优先**布局（PushPlus 主要在微信内置浏览器查看）：账号卡片式排列，
 四宫格指标、状态徽标、出口 IP 与原始返回信息分层展示，窄屏不会挤成一条缝。
@@ -141,15 +181,20 @@ xvfb-run -a --server-args="-screen 0 1440x900x24" python checkin.py
 
 ---
 
-## 8. 常见问题
+## 9. 常见问题
+
+**Q: 日志出现 `code=None`（一直没有 POST）**
+浏览器引擎里 Turnstile widget 没完成。GitHub 托管 runner 无 GPU，属正常现象，
+请改用 `api` 引擎（求解服务）或自建 runner。
 
 **Q: 日志出现 `code=5 reason=turnstile`**
-说明 Turnstile 没通过。依次检查：是否 headful；CI 是否用 `windows-latest`；
-是否有 CDN/代理拦截 `challenges.cloudflare.com`；cookie 是否已过期。
+Turnstile 没通过。若用的是 `api` 引擎，多为求解服务 token 与本站参数/IP 不匹配，
+换 provider 或换线路；若用 `browser` 引擎，检查是否 headful、是否能访问
+`challenges.cloudflare.com`、cookie 是否过期。
 
 **Q: 日志出现 `code=4 reason=device-mismatch`**
-cookie 的登录设备与运行环境不一致。看日志里的 `loginDevice` / `currentDevice`，
-用与运行环境相同的设备重新登录并抓 cookie。
+`api` 引擎会自动切换 UA 重试；若仍失败，看日志里的 `loginDevice`，确认对应 UA 配置文件存在。
+`browser` 引擎则需运行环境与登录设备一致。
 
 **Q: 日志出现 `code=1 repeated: true`**
 今天已经签过了，属于正常情况，不会重复加分。
@@ -159,12 +204,15 @@ cookie 失效（被登出）。重新登录拿新 cookie。
 
 ---
 
-## 9. 变更说明
+## 10. 变更说明
 
-- **2026-11-26**：适配 Cloudflare Turnstile。改用 Playwright 真实 Chromium 通过
-  `action=checkin / cData=nonce / interaction-only` 校验；按前端算法补上
-  `proof = sha256(nonce + ".glados-observe-v1")`；推送后端改为 PushPlus，
-  并使用手机优先的卡片式排版；新增失败自动重试与 `device-mismatch` 诊断。
+- **2026-11-26**：适配 Cloudflare Turnstile。
+  - 新增 `engine_api.py`：Turnstile 求解服务（capsolver/yescaptcha/2captcha）+ 纯 HTTP 提交，
+    并自动对齐 `loginDevice` 的 UA（解决 `device-mismatch`）；
+  - `checkin.py` 保留 Playwright 浏览器引擎（真实桌面可用），按环境变量自动选择引擎；
+  - 按前端算法补上 `proof = sha256(nonce + ".glados-observe-v1")`；
+  - 推送后端改为 PushPlus，手机优先卡片式排版；
+  - 工作流改为 `ubuntu-latest`，有求解服务走 api 引擎，否则回退 xvfb + 浏览器引擎。
 
 ## 免责声明
 

@@ -8,18 +8,22 @@ on:
       - 'README.md'
       - 'imgs/**'
   schedule:
-    # 北京时间 09:18 / 12:18（UTC 01:18 / 04:18），避开整点高峰
+    # 北京时间 09:18 / 12:18（UTC 01:18 / 04:18）
     - cron: '18 1,4 * * *'
 
 jobs:
   checkin:
     name: glados checkin
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
     timeout-minutes: 20
 
     permissions:
       contents: read
       actions: write
+
+    env:
+      # 有求解服务 key 时走 api 引擎（推荐，稳定）；没有则回退浏览器引擎
+      TURNSTILE_API_KEY: ${{ secrets.TURNSTILE_API_KEY }}
 
     steps:
       - name: Checkout Code
@@ -35,15 +39,28 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      # 用 Playwright 自带 Chromium，保持版本可控
+      # 仅在没有求解服务时，才需要浏览器兜底
       - name: Install Playwright Chromium
-        run: python -m playwright install chromium
+        if: env.TURNSTILE_API_KEY == ''
+        run: python -m playwright install --with-deps chromium
 
-      # Cloudflare Turnstile 在 headless 下 tsState=error（拿不到 token），必须 headful。
-      # windows-latest 自带交互式桌面会话，可原生 headful 运行，且 UA/系统与登录设备一致，
-      # 不会触发 code=4 device-mismatch。
-      - name: Running checkin
+      - name: Install Xvfb (browser fallback)
+        if: env.TURNSTILE_API_KEY == ''
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq xvfb
+
+      - name: Running checkin (api engine)
+        if: env.TURNSTILE_API_KEY != ''
         run: python checkin.py
+        env:
+          GLADOS_COOKIES: ${{ secrets.GLADOS_COOKIES }}
+          PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
+          TURNSTILE_PROVIDER: ${{ secrets.TURNSTILE_PROVIDER }}
+          TURNSTILE_API_KEY: ${{ secrets.TURNSTILE_API_KEY }}
+          PYTHONIOENCODING: 'utf-8'
+
+      - name: Running checkin (browser engine)
+        if: env.TURNSTILE_API_KEY == ''
+        run: xvfb-run -a --server-args="-screen 0 1440x900x24" python checkin.py
         env:
           GLADOS_COOKIES: ${{ secrets.GLADOS_COOKIES }}
           PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
