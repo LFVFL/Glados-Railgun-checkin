@@ -195,13 +195,21 @@ xvfb-run -a --server-args="-screen 0 1440x900x24" python checkin.py
 ## 9. 常见问题
 
 **Q: 日志出现 `code=None`（一直没有 POST）**
-浏览器引擎里 Turnstile widget 没完成。GitHub 托管 runner 无 GPU，属正常现象，
-请改用 `api` 引擎（求解服务）或自建 runner。
+浏览器引擎里 Turnstile widget 没完成。看日志里那行 `Turnstile 资源加载异常`：
+
+- 出现 `400 .../cdn-cgi/challenge-platform/...`：**当前出口 IP 被 Cloudflare 限流**。
+  这是最常见的故障——同一个 IP 在 Cloudflare 眼里“可疑”时，challenge 端点直接 400，
+  widget 不会渲染，签到请求根本发不出去。换网络（家宽 ↔ 手机热点）、
+  换代理出口、等几小时后冷却，或改用 `api` 引擎（求解服务自带干净出口）。
+  用第三方 Turnstile 演示页（如 `nopecha.com/demo/turnstile`）也能复现 400，
+  说明与本脚本、与 glados 都无关。
+- 出现 `failed net::ERR_...`：本地网络/代理/DNS 拦了 `challenges.cloudflare.com`。
+- 什么都没打印：页面没加载完，检查 cookie 是否已失效。
 
 **Q: 日志出现 `code=5 reason=turnstile`**
-Turnstile 没通过。若用的是 `api` 引擎，多为求解服务 token 与本站参数/IP 不匹配，
-换 provider 或换线路；若用 `browser` 引擎，检查是否 headful、是否能访问
-`challenges.cloudflare.com`、cookie 是否过期。
+Turnstile 没通过（此时说明设备检查已通过，只差 token）。若用的是 `api` 引擎，
+多为求解服务 token 与本站参数/IP 不匹配，换 provider 或换线路；
+若用 `browser` 引擎，同上先排查 IP 限流。
 
 **Q: 日志出现 `code=4 reason=device-mismatch`**
 `api` 引擎会自动切换 UA 重试；若仍失败，看日志里的 `loginDevice`，确认对应 UA 配置文件存在。

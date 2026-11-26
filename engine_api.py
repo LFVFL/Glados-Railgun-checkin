@@ -93,9 +93,17 @@ def _base_headers(profile: Dict[str, str]) -> Dict[str, str]:
 
 # ---------------------------------------------------------------- 求解服务
 
+CAPSOLVER_CREATE = "https://api.capsolver.com/createTask"
+CAPSOLVER_RESULT = "https://api.capsolver.com/getTaskResult"
+YESCAPTCHA_CREATE = "https://api.yescaptcha.com/createTask"
+YESCAPTCHA_RESULT = "https://api.yescaptcha.com/getTaskResult"
+TWOCAPTCHA_IN = "https://2captcha.com/in.php"
+TWOCAPTCHA_RES = "https://2captcha.com/res.php"
+
+
 def solve_capsolver(key: str, sitekey: str, pageurl: str, action: str, cdata: str, log) -> Optional[str]:
     create = requests.post(
-        "https://api.capsolver.com/createTask",
+        CAPSOLVER_CREATE,
         json={
             "clientKey": key,
             "task": {
@@ -114,7 +122,7 @@ def solve_capsolver(key: str, sitekey: str, pageurl: str, action: str, cdata: st
     for _ in range(40):
         time.sleep(3)
         r = requests.post(
-            "https://api.capsolver.com/getTaskResult",
+            CAPSOLVER_RESULT,
             json={"clientKey": key, "taskId": tid},
             timeout=30,
         ).json()
@@ -129,7 +137,7 @@ def solve_capsolver(key: str, sitekey: str, pageurl: str, action: str, cdata: st
 
 def solve_2captcha(key: str, sitekey: str, pageurl: str, action: str, cdata: str, log) -> Optional[str]:
     r = requests.post(
-        "https://2captcha.com/in.php",
+        TWOCAPTCHA_IN,
         data={
             "method": "turnstile",
             "key": key,
@@ -148,7 +156,7 @@ def solve_2captcha(key: str, sitekey: str, pageurl: str, action: str, cdata: str
     for _ in range(40):
         time.sleep(5)
         g = requests.get(
-            "https://2captcha.com/res.php",
+            TWOCAPTCHA_RES,
             params={"key": key, "action": "get", "id": rid, "json": 1},
             timeout=30,
         ).json()
@@ -162,7 +170,7 @@ def solve_2captcha(key: str, sitekey: str, pageurl: str, action: str, cdata: str
 
 def solve_yescaptcha(key: str, sitekey: str, pageurl: str, action: str, cdata: str, log) -> Optional[str]:
     create = requests.post(
-        "https://api.yescaptcha.com/createTask",
+        YESCAPTCHA_CREATE,
         json={
             "clientKey": key,
             "task": {
@@ -182,7 +190,7 @@ def solve_yescaptcha(key: str, sitekey: str, pageurl: str, action: str, cdata: s
     for _ in range(40):
         time.sleep(3)
         r = requests.post(
-            "https://api.yescaptcha.com/getTaskResult",
+            YESCAPTCHA_RESULT,
             json={"clientKey": key, "taskId": tid},
             timeout=30,
         ).json()
