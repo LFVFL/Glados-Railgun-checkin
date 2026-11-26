@@ -249,7 +249,7 @@ code=4 reason=device-mismatch  loginDevice=Android  currentDevice=Windows
 
 | 环节 | 结果 |
 |---|---|
-| 本地 `peak` 求解 → 提交 | **`code=0 Checkin! Got 2 Points`**（`demo.alice@example.com` +2 分） |
+| 本地 `peak` 求解 → 提交 | **`code=0 Checkin! Got 2 Points`**（示例账号 +2 分） |
 | 本地 PushPlus 推送 | 成功，标题 `GLaDOS 签到成功 · +2分` |
 | GitHub Actions api 引擎（单账号） | `code=1 repeated=True`，`PushPlus 推送成功`，run success |
 | GitHub Actions api 引擎（三账号） | `成功 0 · 已签 3 · 失败 0`，其中一账号自动走 `code=4 → android UA` 重试成功 |
