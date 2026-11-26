@@ -225,6 +225,15 @@ def run_account(index: int, cookie_raw: str, headless: bool, log) -> AccountResu
                 }
                 log("  设备不匹配：请用与登录时相同的操作系统/浏览器 UA")
                 break
+
+            probs = record.get("ts_problems") or []
+            limited = any(str(p).startswith("400") for p in probs)
+            if limited:
+                # 出口 IP 被 Cloudflare 限流：短间隔重试只会加深标记，必须长退避
+                result.detail["ip_limited"] = True
+                log("  出口 IP 被 Cloudflare 限流，放弃本轮重试（换网络或稍后再跑）")
+                break
+
             if attempt < attempts:
                 log("  Cloudflare 校验未通过，重试…")
 
