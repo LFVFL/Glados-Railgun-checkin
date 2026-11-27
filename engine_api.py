@@ -346,16 +346,28 @@ def run_account(index: int, cookie_raw: str, provider: str, api_key: str, log) -
         if proxy:
             s.proxies.update({"http": proxy, "https": proxy})
 
-        try:
-            ch = s.get(SITE + CHALLENGE, timeout=30).json()
-        except Exception as exc:
-            log(f"  challenge 请求异常: {exc}")
-            break
+        # challenge 偶尔会返回 {"code": -2, "message": "没有权限"}，
+        # 属于瞬时失败（短时限流），重试几次通常就好，不要当成账号失效
+        ch, nonce, sitekey = {}, None, None
+        for attempt in range(1, 4):
+            try:
+                ch = s.get(SITE + CHALLENGE, timeout=30).json()
+            except Exception as exc:
+                log(f"  challenge 请求异常（第 {attempt}/3 次）: {exc}")
+                time.sleep(4)
+                continue
 
-        nonce = ch.get("nonce")
-        sitekey = ch.get("turnstile")
+            nonce = ch.get("nonce")
+            sitekey = ch.get("turnstile")
+            if nonce and sitekey:
+                break
+
+            log(f"  challenge 返回异常（第 {attempt}/3 次）: {ch}")
+            if attempt < 3:
+                time.sleep(4)
+
         if not nonce or not sitekey:
-            log(f"  challenge 返回异常: {ch}")
+            log("  challenge 连续失败，跳过本账号（稍后重跑即可）")
             body = {"code": -1, "message": f"challenge 异常: {ch}"}
             break
 
