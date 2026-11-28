@@ -64,6 +64,11 @@ gld:sess=账号1...; gld:sess.sig=账号1...&gld:sess=账号2...; gld:sess.sig=�
 **想同时推给好几个人**：在里面建一个「群组」把大家都加进去，用**群组 token** 即可；
 或者直接把多串 token 用 `&` 拼起来填进 secret（脚本会逐个推送同一份内容）。
 
+> ⚠️ **每个 token 对应的 PushPlus 账户都必须先实名认证**，否则调用接口会返回
+> `{"code": 905, "msg": "账户未进行实名认证"}`，消息发不出去。
+> 去 https://verify.pushplus.plus 完成认证即可，认证后无需改任何代码。
+> 日志里看到 `PushPlus 推送失败 [2/2]: {'code': 905 ...}` 就是这个问题，不是脚本故障。
+
 ### 第 5 步：把上面拿到的值填进 GitHub Secrets
 
 进你自己的仓库 → **Settings（设置）** → 左侧 **Secrets and variables** → **Actions**
